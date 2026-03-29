@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceFinance</title>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --bg: #F3F4F6;
+            --card: #FFFFFF;
+            --text: #1F2937;
+            --danger: #EF4444;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 { margin: 0; font-size: 1.5rem; }
+        p { color: #6B7280; font-size: 0.9rem; }
+
+        /* Zone du Micro */
+        .mic-container {
+            background: var(--card);
+            padding: 20px;
+            border-radius: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .mic-btn {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            font-size: 30px;
+            cursor: pointer;
+            box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.4);
+            transition: transform 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px auto;
+        }
+
+        .mic-btn:active { transform: scale(0.95); }
+        .mic-btn.listening { animation: pulse 1.5s infinite; background-color: var(--danger); }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        #transcript {
+            font-style: italic;
+            color: #6B7280;
+            min-height: 20px;
+        }
+
+        /* Liste des dépenses */
+        .list-container {
+            background: var(--card);
+            border-radius: 15px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .entry {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #E5E7EB;
+        }
+
+        .entry:last-child { border-bottom: none; }
+
+        .entry-info h4 { margin: 0; font-size: 1rem; }
+        .entry-info span { font-size: 0.8rem; color: #6B7280; }
+        .entry-amount { font-weight: bold; color: var(--danger); }
+
+        .actions {
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        .btn-export {
+            background: white;
+            border: 1px solid #D1D5DB;
+            padding: 10px 20px;
+            border-radius: 8px;
+            color: var(--text);
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>VoiceFinance</h1>
+        <p>Dites : "Dépense, 5 euros, boulangerie"</p>
+    </header>
+
+    <div class="mic-container">
+        <button id="micBtn" class="mic-btn">🎤</button>
+        <div id="transcript">Appuyez pour parler...</div>
+    </div>
+
+    <div class="list-container">
+        <h3>Historique</h3>
+        <div id="entriesList">
+            <!-- Les dépenses s'afficheront ici -->
+            <div style="text-align:center; color:#9CA3AF; padding:20px;">Aucune dépense</div>
+        </div>
+    </div>
+
+    <div class="actions">
+        <a href="#" id="exportBtn" class="btn-export">📥 Télécharger le fichier (.csv)</a>
+    </div>
+</div>
+
+<script>
+    // --- 1. CONFIGURATION ET VARIABLES ---
+    const micBtn = document.getElementById('micBtn');
+    const transcriptDisplay = document.getElementById('transcript');
+    const entriesList = document.getElementById('entriesList');
+    const exportBtn = document.getElementById('exportBtn');
+    
+    let transactions = JSON.parse(localStorage.getItem('financeData')) || [];
+
+    // --- 2. MOTEUR VOCAL (Web Speech API) ---
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'fr-FR';
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+
+        micBtn.addEventListener('click', () => {
+            recognition.start();
+            micBtn.classList.add('listening');
+            transcriptDisplay.textContent = "Je vous écoute...";
+        });
+
+        recognition.onresult = (event) => {
+            const speechResult = event.results[0][0].transcript;
+            transcriptDisplay.textContent = `"${speechResult}"`;
+            micBtn.classList.remove('listening');
+            processCommand(speechResult);
+        };
+
+        recognition.onspeechend = () => {
+            recognition.stop();
+            micBtn.classList.remove('listening');
+        };
+
+        recognition.onerror = (event) => {
+            transcriptDisplay.textContent = "Erreur: " + event.error;
+            micBtn.classList.remove('listening');
+        };
+    } else {
+        transcriptDisplay.textContent = "Votre navigateur ne supporte pas la reconnaissance vocale.";
+    }
+
+    // --- 3. LOGIQUE DE TRAITEMENT (NLP Simplifié) ---
+    function processCommand(text) {
+        const lowerText = text.toLowerCase();
+        
+        // Détection du type (Dépense ou Revenu)
+        let type = 'Dépense';
+        if (lowerText.includes('revenu') || lowerText.includes('salaire') || lowerText.includes('gain')) {
+            type = 'Revenu';
+        }
+
+        // Extraction du montant (Regex pour trouver des chiffres)
+        // Cherche des formats comme "5", "5.00", "5,50"
+        const amountMatch = lowerText.match(/(\d+[.,]?\d*)/);
+        let amount = 0;
+        
+        if (amountMatch) {
+            // Remplace la virgule par un point pour le calcul JS
+            amount = parseFloat(amountMatch[0].replace(',', '.'));
+        } else {
+            alert("Je n'ai pas trouvé de montant. Veuillez dire par exemple : 5 euros.");
+            return;
+        }
+
+        // Extraction de la catégorie (Tout ce qui est après le montant)
+        // On essaie de nettoyer la phrase
+        let category = "Divers";
+        const parts = text.split(/(\d+[.,]?\d*)/);
+        if (parts.length > 2) {
+            // Prend la partie après le chiffre et nettoie les virgules/punctuation
+            category = parts[2].replace(/[,.]/g, '').trim();
+            if(category.length < 2) category = "Divers";
+        }
+
+        // Création de l'objet
+        const entry = {
+            id: Date.now(),
+            date: new Date().toLocaleDateString('fr-FR'),
+            time: new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'}),
+            type: type,
+            amount: amount,
+            category: category.charAt(0).toUpperCase() + category.slice(1) // Majuscule
+        };
+
+        saveEntry(entry);
+    }
+
+    // --- 4. GESTION DES DONNÉES ---
+    function saveEntry(entry) {
+        transactions.unshift(entry); // Ajoute au début
+        localStorage.setItem('financeData', JSON.stringify(transactions));
+        renderList();
+    }
+
+    function renderList() {
+        entriesList.innerHTML = '';
+        if (transactions.length === 0) {
+            entriesList.innerHTML = '<div style="text-align:center; color:#9CA3AF; padding:20px;">Aucune dépense</div>';
+            return;
+        }
+
+        transactions.forEach(t => {
+            const color = t.type === 'Dépense' ? 'var(--danger)' : 'green';
+            const sign = t.type === 'Dépense' ? '-' : '+';
+            
+            const div = document.createElement('div');
+            div.className = 'entry';
+            div.innerHTML = `
+                <div class="entry-info">
+                    <h4>${t.category}</h4>
+                    <span>${t.date} à ${t.time}</span>
+                </div>
+                <div class="entry-amount" style="color:${color}">
+                    ${sign} ${t.amount.toFixed(2)} €
+                </div>
+            `;
+            entriesList.appendChild(div);
+        });
+    }
+
+    // --- 5. EXPORTATION FICHIER ---
+    exportBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if(transactions.length === 0) return alert("Rien à exporter");
+
+        let csvContent = "data:text/csv;charset=utf-8,";
+        csvContent += "Date,Heure,Type,Categorie,Montant\n";
+
+        transactions.forEach(t => {
+            const row = `${t.date},${t.time},${t.type},${t.category},${t.amount}`;
+            csvContent += row + "\n";
+        });
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "mes_finances.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    });
+
+    // Initialisation
+    renderList();
+
+</script>
+
+</body>
+</html>

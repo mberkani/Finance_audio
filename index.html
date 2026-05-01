@@ -3,6 +3,524 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceFinance - Stockage JSON</title>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --bg: #F3F4F6;
+            --card: #FFFFFF;
+            --text: #1F2937;
+            --danger: #EF4444;
+            --success: #10B981;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 { margin: 0; font-size: 1.5rem; }
+        p { color: #6B7280; font-size: 0.9rem; }
+
+        .mic-container {
+            background: var(--card);
+            padding: 20px;
+            border-radius: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .mic-btn {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            font-size: 30px;
+            cursor: pointer;
+            box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.4);
+            transition: transform 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px auto;
+        }
+
+        .mic-btn:active { transform: scale(0.95); }
+        .mic-btn.listening { animation: pulse 1.5s infinite; background-color: var(--danger); }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        #transcript {
+            font-style: italic;
+            color: #6B7280;
+            min-height: 20px;
+        }
+
+        .list-container {
+            background: var(--card);
+            border-radius: 15px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .entry {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #E5E7EB;
+        }
+
+        .entry:last-child { border-bottom: none; }
+
+        .entry-info h4 { margin: 0; font-size: 1rem; }
+        .entry-info span { font-size: 0.8rem; color: #6B7280; }
+        .entry-amount { font-weight: bold; }
+
+        .actions {
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        .btn {
+            background: white;
+            border: 1px solid #D1D5DB;
+            padding: 10px 20px;
+            border-radius: 8px;
+            color: var(--text);
+            text-decoration: none;
+            font-size: 0.9rem;
+            display: inline-block;
+            margin: 5px;
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            border: none;
+        }
+
+        .status {
+            text-align: center;
+            font-size: 0.8rem;
+            margin-top: 10px;
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        .status.success { background: #D1FAE5; color: #065F46; }
+        .status.error { background: #FEE2E2; color: #991B1B; }
+        .status.loading { background: #DBEAFE; color: #1E40AF; }
+        
+        kbd {
+            background: #f3f4f6;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-family: monospace;
+            font-size: 0.7rem;
+        }
+        
+        .debug-info {
+            background: #1F2937;
+            color: #E5E7EB;
+            padding: 8px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 0.7rem;
+            margin-top: 10px;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>🎤 VoiceFinance</h1>
+        <p>Dites : <strong>"Dépense 5 euros boulangerie"</strong></p>
+    </header>
+
+    <div class="mic-container">
+        <button id="micBtn" class="mic-btn">🎤</button>
+        <div id="transcript">Appuyez pour parler...</div>
+    </div>
+
+    <div class="list-container">
+        <h3>📋 Historique</h3>
+        <div id="entriesList">
+            <div style="text-align:center; color:#9CA3AF; padding:20px;">Chargement...</div>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button id="exportBtn" class="btn">📥 Exporter JSON</button>
+        <button id="importBtn" class="btn">📂 Importer JSON</button>
+        <button id="resetBtn" class="btn" style="border-color:#EF4444; color:#EF4444;">🗑️ Réinitialiser</button>
+    </div>
+    
+    <div class="actions">
+        <button id="backupBtn" class="btn btn-primary">💾 Sauvegarder (télécharger)</button>
+        <input type="file" id="restoreInput" accept=".json" style="display:none">
+    </div>
+    
+    <div id="statusMsg" class="status"></div>
+    
+    <div class="debug-info" id="debugInfo">
+        📊 Prêt - Parlez pour ajouter une transaction
+    </div>
+</div>
+
+<script>
+    // ========== VARIABLES GLOBALES ==========
+    let transactions = [];
+    let currentId = 0;
+    
+    // ========== ÉLÉMENTS DOM ==========
+    const micBtn = document.getElementById('micBtn');
+    const transcriptDisplay = document.getElementById('transcript');
+    const entriesList = document.getElementById('entriesList');
+    const exportBtn = document.getElementById('exportBtn');
+    const importBtn = document.getElementById('importBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const backupBtn = document.getElementById('backupBtn');
+    const restoreInput = document.getElementById('restoreInput');
+    const statusMsg = document.getElementById('statusMsg');
+    const debugInfo = document.getElementById('debugInfo');
+    
+    // ========== FONCTIONS UTILITAIRES ==========
+    function showStatus(message, type = 'success') {
+        statusMsg.textContent = message;
+        statusMsg.className = `status ${type}`;
+        debugInfo.innerHTML = `📌 ${new Date().toLocaleTimeString()} : ${message}`;
+        
+        setTimeout(() => {
+            if (statusMsg.textContent === message) {
+                statusMsg.className = 'status';
+            }
+        }, 3000);
+    }
+    
+    function updateDebug(message) {
+        debugInfo.innerHTML = `📌 ${new Date().toLocaleTimeString()} : ${message}<br>💰 ${transactions.length} transactions | 💶 Solde: ${calculateTotal().toFixed(2)}€`;
+    }
+    
+    // ========== GESTION DES DONNÉES ==========
+    function calculateTotal() {
+        return transactions.reduce((sum, t) => {
+            const amount = t.amount || 0;
+            return t.type === 'Dépense' ? sum - amount : sum + amount;
+        }, 0);
+    }
+    
+    function saveToLocalStorage() {
+        localStorage.setItem('voicefinance_data', JSON.stringify(transactions));
+        localStorage.setItem('voicefinance_lastId', currentId.toString());
+        showStatus("💾 Sauvegardé localement", "success");
+        updateDebug("Données sauvegardées localement");
+    }
+    
+    function loadFromLocalStorage() {
+        const saved = localStorage.getItem('voicefinance_data');
+        const savedId = localStorage.getItem('voicefinance_lastId');
+        
+        if (saved) {
+            try {
+                transactions = JSON.parse(saved);
+                if (savedId) currentId = parseInt(savedId);
+                showStatus(`📱 Chargé: ${transactions.length} transactions`, "success");
+                updateDebug(`Chargé depuis stockage local`);
+                return true;
+            } catch(e) {
+                console.error("Erreur chargement:", e);
+            }
+        }
+        
+        // Données de démo si vide
+        if (transactions.length === 0) {
+            transactions = [
+                {
+                    id: Date.now(),
+                    date: new Date().toLocaleDateString('fr-FR'),
+                    time: new Date().toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'}),
+                    type: 'Dépense',
+                    amount: 5.50,
+                    category: 'Café'
+                },
+                {
+                    id: Date.now() + 1,
+                    date: new Date().toLocaleDateString('fr-FR'),
+                    time: new Date().toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'}),
+                    type: 'Revenu',
+                    amount: 1500,
+                    category: 'Salaire'
+                }
+            ];
+            currentId = transactions.length;
+            saveToLocalStorage();
+        }
+        
+        return false;
+    }
+    
+    // ========== EXPORT/IMPORT JSON ==========
+    function exportToJSON() {
+        const exportData = {
+            version: "1.0",
+            exportDate: new Date().toISOString(),
+            transactions: transactions,
+            stats: {
+                total: transactions.length,
+                solde: calculateTotal()
+            }
+        };
+        
+        const jsonStr = JSON.stringify(exportData, null, 2);
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `voicefinance_${new Date().toISOString().split('T')[0]}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        
+        showStatus("📁 Exporté en JSON", "success");
+        updateDebug("Données exportées en JSON");
+    }
+    
+    function importFromJSON(file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const data = JSON.parse(e.target.result);
+                
+                if (data.transactions && Array.isArray(data.transactions)) {
+                    transactions = data.transactions;
+                } else if (Array.isArray(data)) {
+                    transactions = data;
+                } else {
+                    throw new Error("Format invalide");
+                }
+                
+                saveToLocalStorage();
+                renderList();
+                showStatus(`✅ Importé: ${transactions.length} transactions`, "success");
+                updateDebug(`Import JSON réussi`);
+            } catch(error) {
+                showStatus("❌ Fichier JSON invalide", "error");
+                updateDebug(`Erreur import: ${error.message}`);
+            }
+        };
+        reader.readAsText(file);
+    }
+    
+    function resetAll() {
+        if (confirm("⚠️ Supprimer toutes les transactions ? Cette action est irréversible !")) {
+            transactions = [];
+            currentId = 0;
+            saveToLocalStorage();
+            renderList();
+            showStatus("🗑️ Toutes les données ont été effacées", "success");
+            updateDebug("Données réinitialisées");
+        }
+    }
+    
+    // ========== MOTEUR VOCAL ==========
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    async function processCommand(text) {
+        console.log("📝 Commande:", text);
+        const lowerText = text.toLowerCase();
+        
+        // Détection du type
+        let type = 'Dépense';
+        if (lowerText.includes('revenu') || lowerText.includes('salaire') || lowerText.includes('gain') || lowerText.includes('+')) {
+            type = 'Revenu';
+        }
+        
+        // Extraction du montant
+        const amountMatch = text.match(/(\d+[.,]?\d*)/);
+        let amount = 0;
+        
+        if (amountMatch) {
+            amount = parseFloat(amountMatch[0].replace(',', '.'));
+            if (isNaN(amount)) amount = 0;
+        }
+        
+        if (amount <= 0) {
+            showStatus("❌ Aucun montant détecté. Essayez '5 euros'", "error");
+            transcriptDisplay.textContent = "❌ Montant non détecté";
+            return;
+        }
+        
+        // Extraction de la catégorie
+        let category = "Divers";
+        const afterAmount = text.split(amountMatch[0])[1] || "";
+        if (afterAmount.trim()) {
+            category = afterAmount.replace(/[€euros€,.]/gi, '').trim();
+            if (category.length < 2) category = "Divers";
+            category = category.charAt(0).toUpperCase() + category.slice(1);
+        }
+        
+        // Création de l'entrée
+        const now = new Date();
+        const entry = {
+            id: Date.now(),
+            date: now.toLocaleDateString('fr-FR'),
+            time: now.toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'}),
+            type: type,
+            amount: amount,
+            category: category
+        };
+        
+        console.log("✅ Nouvelle transaction:", entry);
+        
+        // Ajout
+        transactions.unshift(entry);
+        saveToLocalStorage();
+        renderList();
+        
+        showStatus(`✅ ${type} : ${amount.toFixed(2)}€ - ${category}`, "success");
+        transcriptDisplay.textContent = `✓ ${type} de ${amount.toFixed(2)}€ en ${category}`;
+    }
+    
+    if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'fr-FR';
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+        
+        micBtn.addEventListener('click', () => {
+            try {
+                recognition.start();
+                micBtn.classList.add('listening');
+                transcriptDisplay.textContent = "🎙️ Je vous écoute...";
+                showStatus("🎤 Parlez maintenant...", "loading");
+            } catch(e) {
+                transcriptDisplay.textContent = "❌ Erreur micro";
+                micBtn.classList.remove('listening');
+            }
+        });
+        
+        recognition.onresult = (event) => {
+            const speechResult = event.results[0][0].transcript;
+            transcriptDisplay.textContent = `"${speechResult}"`;
+            micBtn.classList.remove('listening');
+            processCommand(speechResult);
+        };
+        
+        recognition.onspeechend = () => {
+            recognition.stop();
+            micBtn.classList.remove('listening');
+        };
+        
+        recognition.onerror = (event) => {
+            transcriptDisplay.textContent = `❌ ${event.error}`;
+            micBtn.classList.remove('listening');
+            showStatus("❌ Erreur de reconnaissance", "error");
+        };
+    } else {
+        transcriptDisplay.textContent = "❌ Navigateur non supporté";
+        micBtn.disabled = true;
+        showStatus("❌ Votre navigateur ne supporte pas la reconnaissance vocale", "error");
+    }
+    
+    // ========== AFFICHAGE ==========
+    function renderList() {
+        entriesList.innerHTML = '';
+        
+        if (!transactions || transactions.length === 0) {
+            entriesList.innerHTML = '<div style="text-align:center; color:#9CA3AF; padding:20px;">📭 Aucune transaction</div>';
+            return;
+        }
+        
+        transactions.slice(0, 30).forEach(t => {
+            // Sécurité: vérifier que t existe et a les bonnes propriétés
+            if (!t || typeof t.amount === 'undefined') return;
+            
+            const color = t.type === 'Dépense' ? '#EF4444' : '#10B981';
+            const sign = t.type === 'Dépense' ? '-' : '+';
+            const amount = (t.amount || 0).toFixed(2);
+            
+            const div = document.createElement('div');
+            div.className = 'entry';
+            div.innerHTML = `
+                <div class="entry-info">
+                    <h4>${t.category || 'Divers'}</h4>
+                    <span>${t.date || ''} à ${t.time || ''}</span>
+                </div>
+                <div class="entry-amount" style="color:${color}">
+                    ${sign} ${amount} €
+                </div>
+            `;
+            entriesList.appendChild(div);
+        });
+        
+        // Total (optionnel, plus propre)
+        const total = calculateTotal();
+        const totalDiv = document.createElement('div');
+        totalDiv.style.cssText = "margin-top: 15px; padding-top: 15px; border-top: 2px solid #E5E7EB; text-align: center; font-weight: bold; background: #F9FAFB; border-radius: 8px; padding: 10px;";
+        totalDiv.innerHTML = `💰 Solde total : ${total.toFixed(2)} €`;
+        entriesList.appendChild(totalDiv);
+    }
+    
+    // ========== ÉVÉNEMENTS ==========
+    exportBtn.addEventListener('click', exportToJSON);
+    backupBtn.addEventListener('click', exportToJSON);
+    
+    importBtn.addEventListener('click', () => {
+        restoreInput.click();
+    });
+    
+    restoreInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) {
+            importFromJSON(e.target.files[0]);
+            restoreInput.value = '';
+        }
+    });
+    
+    resetBtn.addEventListener('click', resetAll);
+    
+    // ========== INITIALISATION ==========
+    loadFromLocalStorage();
+    renderList();
+    updateDebug("Application prête - Parlez pour ajouter une transaction");
+    
+    console.log("🚀 VoiceFinance démarré");
+    console.log("Transactions:", transactions);
+</script>
+
+</body>
+</html><!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VoiceFinance - Google Sheets</title>
     <style>
         :root {

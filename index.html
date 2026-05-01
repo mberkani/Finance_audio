@@ -174,35 +174,99 @@
     
     // ========== CHARGEMENT DES DONNÉES JSON ==========
     async function loadFromCloud() {
-        try {
-            statusMsg.textContent = "Chargement des données cloud...";
+    try {
+        console.log("=== DÉBUT CHARGEMENT CLOUD ===");
+        console.log("Bin ID utilisé:", JSONBIN_BIN_ID);
+        console.log("API Key (premiers caractères):", JSONBIN_API_KEY.substring(0, 20) + "...");
+        
+        statusMsg.textContent = "Chargement des données cloud...";
+        
+        const url = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`;
+        console.log("URL complète:", url);
+        
+        // Tentative de chargement depuis JSONBin
+        const response = await fetch(url, {
+            headers: {
+                'X-Master-Key': JSONBIN_API_KEY
+            }
+        });
+        
+        console.log("Statut de la réponse:", response.status);
+        console.log("Headers de réponse:", [...response.headers.entries()]);
+        
+        if (response.ok) {
+            console.log("✅ Réponse OK, tentative de parser le JSON...");
+            const data = await response.json();
+            console.log("Données reçues complètes:", data);
+            console.log("Structure record:", data.record);
             
-            // Tentative de chargement depuis JSONBin
-            const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
-                headers: {
-                    'X-Master-Key': JSONBIN_API_KEY
-                }
-            });
+            transactions = data.record.transactions || [];
+            console.log(`✅ ${transactions.length} transactions chargées depuis le cloud`);
             
-            if (response.ok) {
-                const data = await response.json();
-                transactions = data.record.transactions || [];
-                statusMsg.textContent = "✅ Données chargées depuis le cloud";
+            statusMsg.textContent = "✅ Données chargées depuis le cloud";
+        } else {
+            // Tentative de lire le message d'erreur
+            console.error("❌ Erreur HTTP:", response.status);
+            let errorText = "";
+            try {
+                const errorData = await response.json();
+                errorText = JSON.stringify(errorData);
+                console.error("Détails de l'erreur JSONBin:", errorData);
+            } catch(e) {
+                errorText = await response.text();
+                console.error("Réponse texte brute:", errorText);
+            }
+            
+            // Analyse des erreurs courantes
+            if (response.status === 401) {
+                console.error("🔴 ERREUR D'AUTHENTIFICATION: Votre API Key est invalide ou mal formatée");
+                statusMsg.textContent = "❌ Clé API invalide - Vérifiez JSONBIN_API_KEY";
+            } else if (response.status === 404) {
+                console.error("🔴 BIN NON TROUVÉ: Le Bin ID '${JSONBIN_BIN_ID}' n'existe pas");
+                console.error("   Solution: Créez un nouveau bin sur https://jsonbin.io");
+                statusMsg.textContent = "❌ Bin ID invalide - Créez un bin sur jsonbin.io";
+            } else if (response.status === 403) {
+                console.error("🔴 ACCÈS INTERDIT: Votre clé n'a pas accès à ce bin");
+                statusMsg.textContent = "❌ Accès interdit au bin";
             } else {
-                // Fallback sur localStorage si cloud non configuré
-                const localData = localStorage.getItem('financeData');
-                transactions = localData ? JSON.parse(localData) : [];
+                console.warn("⚠️ Erreur non spécifique, fallback sur localStorage");
                 statusMsg.textContent = "📱 Mode local (cloud non configuré)";
             }
-        } catch (error) {
-            console.error("Erreur cloud:", error);
+            
+            // Fallback sur localStorage
+            const localData = localStorage.getItem('financeData');
+            console.log("Données localStorage trouvées?", !!localData);
+            if (localData) {
+                transactions = JSON.parse(localData);
+                console.log(`${transactions.length} transactions chargées depuis localStorage`);
+            } else {
+                transactions = [];
+                console.log("Aucune donnée locale trouvée, tableau vide");
+            }
+        }
+    } catch (error) {
+        console.error("🔴 EXCEPTION CATASTROPHIQUE:");
+        console.error("Nom de l'erreur:", error.name);
+        console.error("Message:", error.message);
+        console.error("Stack trace:", error.stack);
+        
+        statusMsg.textContent = "❌ Erreur réseau - Vérifiez votre connexion";
+        
+        // Dernier fallback
+        try {
             const localData = localStorage.getItem('financeData');
             transactions = localData ? JSON.parse(localData) : [];
-            statusMsg.textContent = "📱 Mode hors-ligne";
+            console.log("Fallback d'urgence vers localStorage");
+        } catch(localError) {
+            console.error("Impossible même de lire localStorage:", localError);
+            transactions = [];
         }
-        
-        renderList();
     }
+    
+    console.log("=== FIN CHARGEMENT ===");
+    console.log("État final des transactions:", transactions);
+    renderList();
+}
     
     // ========== SAUVEGARDE VERS LE FICHIER JSON ==========
     async function saveToCloud() {

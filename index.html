@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceFinance - Stockage Cloud</title>
+    <title>VoiceFinance - Google Sheets</title>
     <style>
-        /* Votre CSS existant reste identique */
         :root {
             --primary: #4F46E5;
             --bg: #F3F4F6;
             --card: #FFFFFF;
             --text: #1F2937;
             --danger: #EF4444;
+            --success: #10B981;
         }
 
         body {
@@ -122,8 +122,13 @@
             text-align: center;
             font-size: 0.8rem;
             margin-top: 10px;
-            color: #6B7280;
+            padding: 8px;
+            border-radius: 8px;
         }
+
+        .status.success { background: #D1FAE5; color: #065F46; }
+        .status.error { background: #FEE2E2; color: #991B1B; }
+        .status.loading { background: #DBEAFE; color: #1E40AF; }
     </style>
 </head>
 <body>
@@ -147,21 +152,16 @@
     </div>
 
     <div class="actions">
-        <button id="syncBtn" class="btn-sync">☁️ Synchroniser avec le cloud</button>
+        <button id="syncBtn" class="btn-sync">🔄 Synchroniser</button>
         <button id="exportBtn" class="btn-export">📥 Télécharger CSV</button>
     </div>
-    <div class="status" id="statusMsg"></div>
+    <div id="statusMsg" class="status"></div>
 </div>
 
 <script>
     // ========== CONFIGURATION ==========
-    // Utilisation de JSONBin.io (service gratuit pour stocker du JSON)
-    // https://jsonbin.io - Créez votre compte gratuit pour obtenir ces clés
-    const JSONBIN_API_KEY = 'VOTRE_API_KEY_ICI'; // À remplacer par votre vraie clé
-    const JSONBIN_BIN_ID = 'VOTRE_BIN_ID_ICI';   // À remplacer par votre vrai Bin ID
-    
-    // Alternative gratuite sans inscription : utilise sessionStorage pour la démo
-    // Mais pour un vrai stockage perso, utilisez JSONBin ou Firebase
+    // 🔴 REMPLACEZ CETTE URL PAR LA VÔTRE !!!
+    const GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwLQ2VF9qW38dZ_N5kABlJNtR_sqMrMxscdi3bAFiIvHJY7MfVx54aI5bgijfUjbKfKLQ/exec';
     
     const micBtn = document.getElementById('micBtn');
     const transcriptDisplay = document.getElementById('transcript');
@@ -172,92 +172,61 @@
     
     let transactions = [];
     
-    // ========== CHARGEMENT DES DONNÉES JSON ==========
-    async function loadFromCloud() {
+    // ========== CHARGEMENT DEPUIS GOOGLE SHEETS ==========
+    async function loadFromGoogleSheets() {
         try {
-            statusMsg.textContent = "Chargement des données cloud...";
+            showStatus("Chargement des données...", "loading");
             
-            // Tentative de chargement depuis JSONBin
-            const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
-                headers: {
-                    'X-Master-Key': JSONBIN_API_KEY
-                }
-            });
+            const response = await fetch(GOOGLE_SHEETS_API_URL);
             
             if (response.ok) {
-                const data = await response.json();
-                transactions = data.record.transactions || [];
-                statusMsg.textContent = "✅ Données chargées depuis le cloud";
+                transactions = await response.json();
+                // Trier par date (plus récent d'abord)
+                transactions.reverse();
+                showStatus(`✅ ${transactions.length} transactions chargées`, "success");
             } else {
-                // Fallback sur localStorage si cloud non configuré
-                const localData = localStorage.getItem('financeData');
-                transactions = localData ? JSON.parse(localData) : [];
-                statusMsg.textContent = "📱 Mode local (cloud non configuré)";
+                throw new Error("Erreur de chargement");
             }
         } catch (error) {
-            console.error("Erreur cloud:", error);
+            console.error("Erreur:", error);
+            // Fallback localStorage
             const localData = localStorage.getItem('financeData');
             transactions = localData ? JSON.parse(localData) : [];
-            statusMsg.textContent = "📱 Mode hors-ligne";
+            showStatus("📱 Mode local - Vérifiez votre URL Google Sheets", "error");
         }
         
         renderList();
     }
     
-    // ========== SAUVEGARDE VERS LE FICHIER JSON ==========
-    async function saveToCloud() {
-        if (!JSONBIN_API_KEY.includes('VOTRE') && !JSONBIN_BIN_ID.includes('VOTRE')) {
-            // Configuration cloud valide
-            try {
-                // Formater les données par jour
-                const dataByDay = {};
-                transactions.forEach(t => {
-                    if (!dataByDay[t.date]) {
-                        dataByDay[t.date] = [];
-                    }
-                    dataByDay[t.date].push(t);
-                });
-                
-                const payload = {
-                    transactions: transactions,
-                    transactionsByDay: dataByDay,
-                    lastUpdated: new Date().toISOString()
-                };
-                
-                const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Master-Key': JSONBIN_API_KEY
-                    },
-                    body: JSON.stringify(payload)
-                });
-                
-                if (response.ok) {
-                    statusMsg.textContent = "✅ Synchronisé avec le cloud !";
-                    setTimeout(() => {
-                        if (statusMsg.textContent === "✅ Synchronisé avec le cloud !") 
-                            statusMsg.textContent = "Prêt";
-                    }, 3000);
-                } else {
-                    throw new Error("Erreur de sauvegarde");
-                }
-            } catch (error) {
-                statusMsg.textContent = "❌ Erreur de synchronisation";
-                saveToLocalBackup();
-            }
-        } else {
-            // Pas de clé configurée, on sauvegarde en local
-            saveToLocalBackup();
-            statusMsg.textContent = "💾 Sauvegardé localement (configurez JSONBin pour le cloud)";
+    // ========== ENVOI VERS GOOGLE SHEETS ==========
+    async function sendToGoogleSheets(entry) {
+        try {
+            const response = await fetch(GOOGLE_SHEETS_API_URL, {
+                method: 'POST',
+                mode: 'no-cors', // Important pour éviter les erreurs CORS
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    Date: entry.date,
+                    Heure: entry.time,
+                    Type: entry.type,
+                    Categorie: entry.category,
+                    Montant: entry.amount
+                })
+            });
+            
+            // Avec 'no-cors', on ne peut pas lire la réponse
+            // On considère que c'est réussi
+            return true;
+            
+        } catch (error) {
+            console.error("Erreur d'envoi:", error);
+            return false;
         }
     }
     
-    function saveToLocalBackup() {
-        localStorage.setItem('financeData', JSON.stringify(transactions));
-    }
-    
-    // ========== RECHERCHE VOCALE ==========
+    // ========== MOTEUR VOCAL ==========
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (SpeechRecognition) {
@@ -272,11 +241,11 @@
             transcriptDisplay.textContent = "Je vous écoute...";
         });
 
-        recognition.onresult = (event) => {
+        recognition.onresult = async (event) => {
             const speechResult = event.results[0][0].transcript;
             transcriptDisplay.textContent = `"${speechResult}"`;
             micBtn.classList.remove('listening');
-            processCommand(speechResult);
+            await processCommand(speechResult);
         };
 
         recognition.onspeechend = () => {
@@ -293,7 +262,7 @@
     }
 
     // ========== TRAITEMENT COMMANDE ==========
-    function processCommand(text) {
+    async function processCommand(text) {
         const lowerText = text.toLowerCase();
         
         let type = 'Dépense';
@@ -327,20 +296,25 @@
             category: category.charAt(0).toUpperCase() + category.slice(1)
         };
 
-        saveEntry(entry);
-    }
-
-    // ========== GESTION DES DONNÉES ==========
-    function saveEntry(entry) {
+        // Sauvegarde locale d'abord
         transactions.unshift(entry);
-        saveToLocalBackup();
+        localStorage.setItem('financeData', JSON.stringify(transactions));
         renderList();
-        // Sauvegarde automatique vers cloud si configuré
-        if (JSONBIN_API_KEY && !JSONBIN_API_KEY.includes('VOTRE')) {
-            saveToCloud();
+        
+        // Puis envoi vers Google Sheets
+        showStatus("Envoi vers Google Sheets...", "loading");
+        const success = await sendToGoogleSheets(entry);
+        
+        if (success) {
+            showStatus("✅ Sauvegardé dans Google Sheets !", "success");
+            // Recharger pour être à jour
+            setTimeout(() => loadFromGoogleSheets(), 1000);
+        } else {
+            showStatus("⚠️ Sauvegardé localement uniquement", "error");
         }
     }
 
+    // ========== AFFICHAGE ==========
     function renderList() {
         entriesList.innerHTML = '';
         if (transactions.length === 0) {
@@ -348,7 +322,7 @@
             return;
         }
 
-        transactions.forEach(t => {
+        transactions.slice(0, 20).forEach(t => {
             const color = t.type === 'Dépense' ? 'var(--danger)' : '#10B981';
             const sign = t.type === 'Dépense' ? '-' : '+';
             
@@ -366,23 +340,19 @@
             entriesList.appendChild(div);
         });
         
-        // Afficher le total par jour
-        const today = new Date().toLocaleDateString('fr-FR');
-        const todayTransactions = transactions.filter(t => t.date === today);
-        if (todayTransactions.length > 0) {
-            const total = todayTransactions.reduce((sum, t) => {
-                return t.type === 'Dépense' ? sum - t.amount : sum + t.amount;
-            }, 0);
-            const totalDiv = document.createElement('div');
-            totalDiv.style.cssText = "margin-top: 15px; padding-top: 15px; border-top: 2px solid #E5E7EB; text-align: center; font-weight: bold;";
-            totalDiv.innerHTML = `💰 Solde du jour : ${total.toFixed(2)} €`;
-            entriesList.appendChild(totalDiv);
-        }
+        // Afficher le total
+        const total = transactions.reduce((sum, t) => {
+            return t.type === 'Dépense' ? sum - t.amount : sum + t.amount;
+        }, 0);
+        
+        const totalDiv = document.createElement('div');
+        totalDiv.style.cssText = "margin-top: 15px; padding-top: 15px; border-top: 2px solid #E5E7EB; text-align: center; font-weight: bold;";
+        totalDiv.innerHTML = `💰 Solde total : ${total.toFixed(2)} €`;
+        entriesList.appendChild(totalDiv);
     }
 
-    // ========== EXPORT ==========
-    exportBtn.addEventListener('click', (e) => {
-        e.preventDefault();
+    // ========== EXPORT CSV ==========
+    exportBtn.addEventListener('click', () => {
         if(transactions.length === 0) return alert("Rien à exporter");
 
         let csvContent = "data:text/csv;charset=utf-8,";
@@ -404,12 +374,21 @@
     
     // ========== SYNC MANUELLE ==========
     syncBtn.addEventListener('click', async () => {
-        await saveToCloud();
-        await loadFromCloud();
+        await loadFromGoogleSheets();
     });
+    
+    function showStatus(message, type) {
+        statusMsg.textContent = message;
+        statusMsg.className = `status ${type}`;
+        setTimeout(() => {
+            if (statusMsg.textContent === message) {
+                statusMsg.className = 'status';
+            }
+        }, 3000);
+    }
 
     // Initialisation
-    loadFromCloud();
+    loadFromGoogleSheets();
 </script>
 
 </body>

@@ -129,6 +129,486 @@
         .status.success { background: #D1FAE5; color: #065F46; }
         .status.error { background: #FEE2E2; color: #991B1B; }
         .status.loading { background: #DBEAFE; color: #1E40AF; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>VoiceFinance</h1>
+        <p>Dites : "Dépense, 5 euros, boulangerie"</p>
+    </header>
+
+    <div class="mic-container">
+        <button id="micBtn" class="mic-btn">🎤</button>
+        <div id="transcript">Appuyez pour parler...</div>
+    </div>
+
+    <div class="list-container">
+        <h3>Historique</h3>
+        <div id="entriesList">
+            <div style="text-align:center; color:#9CA3AF; padding:20px;">Chargement...</div>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button id="syncBtn" class="btn-sync">🔄 Synchroniser</button>
+        <button id="exportBtn" class="btn-export">📥 Télécharger CSV</button>
+    </div>
+    <div id="statusMsg" class="status"></div>
+</div>
+
+<script>
+    // ========== CONFIGURATION ==========
+    const GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwLQ2VF9qW38dZ_N5kABlJNtR_sqMrMxscdi3bAFiIvHJY7MfVx54aI5bgijfUjbKfKLQ/exec';
+    
+    const micBtn = document.getElementById('micBtn');
+    const transcriptDisplay = document.getElementById('transcript');
+    const entriesList = document.getElementById('entriesList');
+    const exportBtn = document.getElementById('exportBtn');
+    const syncBtn = document.getElementById('syncBtn');
+    const statusMsg = document.getElementById('statusMsg');
+    
+    let transactions = [];
+    
+    // ========== CHARGEMENT DEPUIS GOOGLE SHEETS ==========
+    async function loadFromGoogleSheets() {
+        try {
+            showStatus("Chargement des données...", "loading");
+            console.log("Chargement depuis:", GOOGLE_SHEETS_API_URL);
+            
+            const response = await fetch(GOOGLE_SHEETS_API_URL, {
+                method: 'GET',
+                mode: 'cors',
+                cache: 'no-cache'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            console.log("Données brutes reçues:", data);
+            
+            // Vérifier et convertir les données
+            if (Array.isArray(data) && data.length > 0) {
+                // Convertir les données du format Google Sheets vers notre format
+                transactions = data.map(row => {
+                    // Gérer différents formats possibles
+                    let formattedRow = {};
+                    
+                    // Si c'est un tableau (ancien format)
+                    if (Array.isArray(row)) {
+                        formattedRow = {
+                            date: row[0] || '',
+                            time: row[1] || '',
+                            type: row[2] || 'Dépense',
+                            category: row[3] || 'Divers',
+                            amount: parseFloat(row[4]) || 0
+                        };
+                    } 
+                    // Si c'est un objet
+                    else if (typeof row === 'object') {
+                        formattedRow = {
+                            date: row.Date || row.date || row.DATE || '',
+                            time: row.Heure || row.time || row.TIME || '',
+                            type: row.Type || row.type || 'Dépense',
+                            category: row.Catégorie || row.Categorie || row.category || 'Divers',
+                            amount: parseFloat(row.Montant || row.amount || row.montant || 0)
+                        };
+                    }
+                    
+                    // Validation des données
+                    if (!formattedRow.date) formattedRow.date = new Date().toLocaleDateString('fr-FR');
+                    if (!formattedRow.time) formattedRow.time = new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'});
+                    if (isNaN(formattedRow.amount)) formattedRow.amount = 0;
+                    
+                    return formattedRow;
+                });
+                
+                // Trier par date (plus récent d'abord)
+                transactions.reverse();
+                showStatus(`✅ ${transactions.length} transactions chargées`, "success");
+            } else {
+                // Pas de données, initialiser tableau vide
+                transactions = [];
+                showStatus("📝 Aucune donnée trouvée", "success");
+            }
+            
+        } catch (error) {
+            console.error("Erreur chargement:", error);
+            // Fallback localStorage
+            const localData = localStorage.getItem('financeData');
+            if (localData) {
+                transactions = JSON.parse(localData);
+                showStatus(`📱 Mode local: ${transactions.length} transactions`, "success");
+            } else {
+                transactions = [];
+                showStatus("📱 Mode local - Aucune donnée", "success");
+            }
+        }
+        
+        renderList();
+    }
+    
+    // ========== ENVOI VERS GOOGLE SHEETS ==========
+    async function sendToGoogleSheets(entry) {
+        try {
+            showStatus("Envoi vers Google Sheets...", "loading");
+            
+            const payload = {
+                Date: entry.date,
+                Heure: entry.time,
+                Type: entry.type,
+                Catégorie: entry.category,  // Notez l'accent !
+                Montant: entry.amount
+            };
+            
+            console.log("Envoi:", payload);
+            
+            const response = await fetch(GOOGLE_SHEETS_API_URL, {
+                method: 'POST',
+                mode: 'cors',
+                cache: 'no-cache',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                console.log("Réponse:", result);
+                if (result.success) {
+                    showStatus("✅ Sauvegardé dans Google Sheets !", "success");
+                    return true;
+                } else {
+                    throw new Error(result.error || "Erreur inconnue");
+                }
+            } else {
+                throw new Error(`HTTP ${response.status}`);
+            }
+        } catch (error) {
+            console.error("Erreur d'envoi:", error);
+            showStatus(`⚠️ Sauvegardé localement uniquement: ${error.message}`, "error");
+            return false;
+        }
+    }
+    
+    // ========== MOTEUR VOCAL ==========
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'fr-FR';
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+
+        micBtn.addEventListener('click', () => {
+            recognition.start();
+            micBtn.classList.add('listening');
+            transcriptDisplay.textContent = "Je vous écoute...";
+        });
+
+        recognition.onresult = async (event) => {
+            const speechResult = event.results[0][0].transcript;
+            transcriptDisplay.textContent = `"${speechResult}"`;
+            micBtn.classList.remove('listening');
+            await processCommand(speechResult);
+        };
+
+        recognition.onspeechend = () => {
+            recognition.stop();
+            micBtn.classList.remove('listening');
+        };
+
+        recognition.onerror = (event) => {
+            transcriptDisplay.textContent = "Erreur: " + event.error;
+            micBtn.classList.remove('listening');
+        };
+    } else {
+        transcriptDisplay.textContent = "Votre navigateur ne supporte pas la reconnaissance vocale.";
+    }
+
+    // ========== TRAITEMENT COMMANDE ==========
+    async function processCommand(text) {
+        const lowerText = text.toLowerCase();
+        
+        let type = 'Dépense';
+        if (lowerText.includes('revenu') || lowerText.includes('salaire') || lowerText.includes('gain')) {
+            type = 'Revenu';
+        }
+
+        const amountMatch = lowerText.match(/(\d+[.,]?\d*)/);
+        let amount = 0;
+        
+        if (amountMatch) {
+            amount = parseFloat(amountMatch[0].replace(',', '.'));
+            if (isNaN(amount)) amount = 0;
+        } else {
+            alert("Je n'ai pas trouvé de montant. Veuillez dire par exemple : 5 euros.");
+            return;
+        }
+
+        let category = "Divers";
+        const parts = text.split(/(\d+[.,]?\d*)/);
+        if (parts.length > 2) {
+            category = parts[2].replace(/[,.]/g, '').trim();
+            if(category.length < 2) category = "Divers";
+        }
+
+        const now = new Date();
+        const entry = {
+            id: Date.now(),
+            date: now.toLocaleDateString('fr-FR'),
+            time: now.toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'}),
+            type: type,
+            amount: amount,
+            category: category.charAt(0).toUpperCase() + category.slice(1)
+        };
+
+        console.log("Nouvelle entrée:", entry);
+
+        // Sauvegarde locale d'abord
+        transactions.unshift(entry);
+        localStorage.setItem('financeData', JSON.stringify(transactions));
+        renderList();
+        
+        // Puis envoi vers Google Sheets
+        const success = await sendToGoogleSheets(entry);
+        
+        if (success) {
+            // Recharger pour être à jour
+            setTimeout(() => loadFromGoogleSheets(), 1000);
+        }
+    }
+
+    // ========== AFFICHAGE ==========
+    function renderList() {
+        entriesList.innerHTML = '';
+        
+        if (!transactions || transactions.length === 0) {
+            entriesList.innerHTML = '<div style="text-align:center; color:#9CA3AF; padding:20px;">Aucune transaction</div>';
+            return;
+        }
+
+        // Filtrer les entrées invalides
+        const validTransactions = transactions.filter(t => {
+            if (!t) return false;
+            if (t.amount === undefined || t.amount === null) return false;
+            if (isNaN(t.amount)) return false;
+            return true;
+        });
+        
+        if (validTransactions.length === 0) {
+            entriesList.innerHTML = '<div style="text-align:center; color:#9CA3AF; padding:20px;">Aucune transaction valide</div>';
+            return;
+        }
+
+        validTransactions.slice(0, 20).forEach(t => {
+            const color = t.type === 'Dépense' ? 'var(--danger)' : '#10B981';
+            const sign = t.type === 'Dépense' ? '-' : '+';
+            const amount = t.amount.toFixed(2);
+            
+            const div = document.createElement('div');
+            div.className = 'entry';
+            div.innerHTML = `
+                <div class="entry-info">
+                    <h4>${t.category || 'Divers'}</h4>
+                    <span>${t.date || ''} à ${t.time || ''}</span>
+                </div>
+                <div class="entry-amount" style="color:${color}">
+                    ${sign} ${amount} €
+                </div>
+            `;
+            entriesList.appendChild(div);
+        });
+        
+        // Afficher le total
+        const total = validTransactions.reduce((sum, t) => {
+            const amount = t.amount || 0;
+            return t.type === 'Dépense' ? sum - amount : sum + amount;
+        }, 0);
+        
+        const totalDiv = document.createElement('div');
+        totalDiv.style.cssText = "margin-top: 15px; padding-top: 15px; border-top: 2px solid #E5E7EB; text-align: center; font-weight: bold;";
+        totalDiv.innerHTML = `💰 Solde total : ${total.toFixed(2)} €`;
+        entriesList.appendChild(totalDiv);
+    }
+
+    // ========== EXPORT CSV ==========
+    exportBtn.addEventListener('click', () => {
+        if(!transactions || transactions.length === 0) return alert("Rien à exporter");
+
+        let csvContent = "data:text/csv;charset=utf-8,";
+        csvContent += "Date,Heure,Type,Categorie,Montant\n";
+
+        transactions.forEach(t => {
+            const row = `${t.date || ''},${t.time || ''},${t.type || 'Dépense'},${t.category || 'Divers'},${t.amount || 0}`;
+            csvContent += row + "\n";
+        });
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `finances_${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    });
+    
+    // ========== SYNC MANUELLE ==========
+    syncBtn.addEventListener('click', async () => {
+        await loadFromGoogleSheets();
+    });
+    
+    function showStatus(message, type) {
+        statusMsg.textContent = message;
+        statusMsg.className = `status ${type}`;
+        setTimeout(() => {
+            if (statusMsg.textContent === message) {
+                statusMsg.className = 'status';
+            }
+        }, 4000);
+    }
+
+    // ========== INITIALISATION ==========
+    console.log("Application démarrée");
+    loadFromGoogleSheets();
+</script>
+
+</body>
+</html><!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceFinance - Google Sheets</title>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --bg: #F3F4F6;
+            --card: #FFFFFF;
+            --text: #1F2937;
+            --danger: #EF4444;
+            --success: #10B981;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 { margin: 0; font-size: 1.5rem; }
+        p { color: #6B7280; font-size: 0.9rem; }
+
+        .mic-container {
+            background: var(--card);
+            padding: 20px;
+            border-radius: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .mic-btn {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            font-size: 30px;
+            cursor: pointer;
+            box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.4);
+            transition: transform 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px auto;
+        }
+
+        .mic-btn:active { transform: scale(0.95); }
+        .mic-btn.listening { animation: pulse 1.5s infinite; background-color: var(--danger); }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        #transcript {
+            font-style: italic;
+            color: #6B7280;
+            min-height: 20px;
+        }
+
+        .list-container {
+            background: var(--card);
+            border-radius: 15px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .entry {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #E5E7EB;
+        }
+
+        .entry:last-child { border-bottom: none; }
+
+        .entry-info h4 { margin: 0; font-size: 1rem; }
+        .entry-info span { font-size: 0.8rem; color: #6B7280; }
+        .entry-amount { font-weight: bold; color: var(--danger); }
+
+        .actions {
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        .btn-export, .btn-sync {
+            background: white;
+            border: 1px solid #D1D5DB;
+            padding: 10px 20px;
+            border-radius: 8px;
+            color: var(--text);
+            text-decoration: none;
+            font-size: 0.9rem;
+            display: inline-block;
+            margin: 5px;
+            cursor: pointer;
+        }
+
+        .status {
+            text-align: center;
+            font-size: 0.8rem;
+            margin-top: 10px;
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        .status.success { background: #D1FAE5; color: #065F46; }
+        .status.error { background: #FEE2E2; color: #991B1B; }
+        .status.loading { background: #DBEAFE; color: #1E40AF; }
         
         .refresh-btn {
             background: #4F46E5;

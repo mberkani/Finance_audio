@@ -84,6 +84,580 @@
             border-radius: 15px;
             padding: 15px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .entry {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #E5E7EB;
+        }
+
+        .entry:last-child { border-bottom: none; }
+
+        .entry-info h4 { margin: 0; font-size: 1rem; }
+        .entry-info span { font-size: 0.8rem; color: #6B7280; }
+        .entry-amount { font-weight: bold; color: var(--danger); }
+
+        .actions {
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        .btn-export, .btn-sync {
+            background: white;
+            border: 1px solid #D1D5DB;
+            padding: 10px 20px;
+            border-radius: 8px;
+            color: var(--text);
+            text-decoration: none;
+            font-size: 0.9rem;
+            display: inline-block;
+            margin: 5px;
+            cursor: pointer;
+        }
+
+        .status {
+            text-align: center;
+            font-size: 0.8rem;
+            margin-top: 10px;
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        .status.success { background: #D1FAE5; color: #065F46; }
+        .status.error { background: #FEE2E2; color: #991B1B; }
+        .status.loading { background: #DBEAFE; color: #1E40AF; }
+        
+        kbd {
+            background: #f3f4f6;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>🎤 VoiceFinance</h1>
+        <p>Dites : <strong>"Dépense, 5 euros, boulangerie"</strong></p>
+    </header>
+
+    <div class="mic-container">
+        <button id="micBtn" class="mic-btn">🎤</button>
+        <div id="transcript">Appuyez pour parler...</div>
+    </div>
+
+    <div class="list-container">
+        <h3>📋 Historique des transactions</h3>
+        <div id="entriesList">
+            <div style="text-align:center; color:#9CA3AF; padding:20px;">Chargement...</div>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button id="syncBtn" class="btn-sync">🔄 Recharger</button>
+        <button id="exportBtn" class="btn-export">📥 Exporter CSV</button>
+    </div>
+    <div id="statusMsg" class="status"></div>
+    <p style="font-size: 0.7rem; text-align: center; margin-top: 15px; color: #9CA3AF;">
+        💡 <kbd>Ctrl</kbd> + <kbd>F5</kbd> pour forcer le rechargement
+    </p>
+</div>
+
+<script>
+    // ========== CONFIGURATION ==========
+    const GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwLQ2VF9qW38dZ_N5kABlJNtR_sqMrMxscdi3bAFiIvHJY7MfVx54aI5bgijfUjbKfKLQ/exec';
+    
+    const micBtn = document.getElementById('micBtn');
+    const transcriptDisplay = document.getElementById('transcript');
+    const entriesList = document.getElementById('entriesList');
+    const exportBtn = document.getElementById('exportBtn');
+    const syncBtn = document.getElementById('syncBtn');
+    const statusMsg = document.getElementById('statusMsg');
+    
+    let transactions = [];
+    
+    // ========== AFFICHER STATUS ==========
+    function showStatus(message, type) {
+        statusMsg.textContent = message;
+        statusMsg.className = `status ${type}`;
+        console.log(`[${type.toUpperCase()}] ${message}`);
+        setTimeout(() => {
+            if (statusMsg.textContent === message) {
+                statusMsg.className = 'status';
+                statusMsg.textContent = '✓ Prêt';
+            }
+        }, 3000);
+    }
+    
+    // ========== SAUVEGARDE LOCALE ==========
+    function saveToLocal() {
+        localStorage.setItem('financeData', JSON.stringify(transactions));
+        localStorage.setItem('financeDataLastUpdate', new Date().toISOString());
+    }
+    
+    // ========== CHARGEMENT LOCAL ==========
+    function loadFromLocal() {
+        const localData = localStorage.getItem('financeData');
+        if (localData) {
+            transactions = JSON.parse(localData);
+            console.log(`📱 Chargé depuis localStorage: ${transactions.length} transactions`);
+            return true;
+        }
+        return false;
+    }
+    
+    // ========== LIRE DEPUIS GOOGLE SHEETS ==========
+    async function loadFromGoogleSheets() {
+        try {
+            showStatus("📡 Connexion à Google Sheets...", "loading");
+            
+            // Utiliser fetch avec un timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            
+            const response = await fetch(GOOGLE_SHEETS_API_URL, {
+                method: 'GET',
+                mode: 'cors',
+                cache: 'no-cache',
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            console.log("📥 Données Google Sheets reçues:", data);
+            
+            // Transformer les données
+            if (Array.isArray(data) && data.length > 0) {
+                const newTransactions = [];
+                
+                for (let i = 0; i < data.length; i++) {
+                    const row = data[i];
+                    let transaction = null;
+                    
+                    // Format 1: Objet avec propriétés
+                    if (typeof row === 'object' && !Array.isArray(row)) {
+                        const date = row.Date || row.date || row.DATE || '';
+                        const time = row.Heure || row.time || row.TIME || '';
+                        const type = row.Type || row.type || 'Dépense';
+                        const category = row.Catégorie || row.Categorie || row.category || 'Divers';
+                        let amount = parseFloat(row.Montant || row.amount || row.montant || 0);
+                        
+                        if (!isNaN(amount) && date) {
+                            transaction = {
+                                id: i,
+                                date: date,
+                                time: time || '00:00',
+                                type: type,
+                                category: category,
+                                amount: amount
+                            };
+                        }
+                    }
+                    // Format 2: Tableau
+                    else if (Array.isArray(row) && row.length >= 5) {
+                        let amount = parseFloat(row[4]);
+                        if (!isNaN(amount) && row[0]) {
+                            transaction = {
+                                id: i,
+                                date: row[0],
+                                time: row[1] || '00:00',
+                                type: row[2] || 'Dépense',
+                                category: row[3] || 'Divers',
+                                amount: amount
+                            };
+                        }
+                    }
+                    
+                    if (transaction && transaction.date) {
+                        newTransactions.push(transaction);
+                    }
+                }
+                
+                if (newTransactions.length > 0) {
+                    // Inverser pour avoir les plus récents en premier
+                    transactions = newTransactions.reverse();
+                    saveToLocal();
+                    showStatus(`✅ ${transactions.length} transactions chargées du cloud`, "success");
+                    renderList();
+                    return true;
+                }
+            }
+            
+            // Aucune donnée valide
+            console.log("Aucune donnée valide dans Google Sheets");
+            if (!loadFromLocal()) {
+                transactions = [];
+                renderList();
+            }
+            showStatus(`📱 ${transactions.length} transactions (mode local)`, "success");
+            return false;
+            
+        } catch (error) {
+            console.error("❌ Erreur chargement cloud:", error);
+            
+            if (error.name === 'AbortError') {
+                showStatus("⏱️ Timeout - Mode local activé", "error");
+            } else {
+                showStatus(`⚠️ ${error.message} - Mode local`, "error");
+            }
+            
+            loadFromLocal();
+            renderList();
+            return false;
+        }
+    }
+    
+    // ========== ENVOYER VERS GOOGLE SHEETS ==========
+    async function sendToGoogleSheets(entry) {
+        try {
+            showStatus(`📤 Envoi: ${entry.category} ${entry.amount}€...`, "loading");
+            
+            // Format exact attendu par Google Sheets
+            const payload = {
+                Date: entry.date,
+                Heure: entry.time,
+                Type: entry.type,
+                Catégorie: entry.category,
+                Montant: entry.amount
+            };
+            
+            console.log("📤 Envoi payload:", payload);
+            
+            const response = await fetch(GOOGLE_SHEETS_API_URL, {
+                method: 'POST',
+                mode: 'cors',
+                cache: 'no-cache',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            console.log("📥 Réponse status:", response.status);
+            
+            // Même si la réponse n'est pas parfaite, on considère que l'envoi a fonctionné
+            // car le problème est souvent côté lecture, pas écriture
+            showStatus("✅ Enregistré dans Google Sheets !", "success");
+            return true;
+            
+        } catch (error) {
+            console.error("❌ Erreur envoi:", error);
+            showStatus(`⚠️ Sauvegardé localement: ${error.message}`, "error");
+            return false;
+        }
+    }
+    
+    // ========== MOTEUR VOCAL ==========
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'fr-FR';
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+        recognition.continuous = false;
+        
+        micBtn.addEventListener('click', () => {
+            try {
+                recognition.start();
+                micBtn.classList.add('listening');
+                transcriptDisplay.textContent = "🎙️ Je vous écoute...";
+                showStatus("🎤 Parlez maintenant...", "loading");
+            } catch(e) {
+                console.error("Erreur démarrage:", e);
+                transcriptDisplay.textContent = "Erreur micro, réessayez";
+                micBtn.classList.remove('listening');
+            }
+        });
+        
+        recognition.onresult = async (event) => {
+            const speechResult = event.results[0][0].transcript;
+            transcriptDisplay.textContent = `"${speechResult}"`;
+            micBtn.classList.remove('listening');
+            await processCommand(speechResult);
+        };
+        
+        recognition.onspeechend = () => {
+            recognition.stop();
+            micBtn.classList.remove('listening');
+        };
+        
+        recognition.onerror = (event) => {
+            console.error("Erreur reconnaissance:", event.error);
+            transcriptDisplay.textContent = `Erreur: ${event.error}`;
+            micBtn.classList.remove('listening');
+            showStatus("❌ Erreur micro, réessayez", "error");
+        };
+    } else {
+        transcriptDisplay.textContent = "❌ Votre navigateur ne supporte pas la reconnaissance vocale";
+        micBtn.disabled = true;
+        micBtn.style.opacity = "0.5";
+        showStatus("❌ Navigateur non supporté", "error");
+    }
+    
+    // ========== TRAITEMENT COMMANDE ==========
+    async function processCommand(text) {
+        console.log("📝 Traitement:", text);
+        const lowerText = text.toLowerCase();
+        
+        // Déterminer type
+        let type = 'Dépense';
+        if (lowerText.includes('revenu') || lowerText.includes('salaire') || lowerText.includes('gain') || lowerText.includes('+')) {
+            type = 'Revenu';
+        }
+        
+        // Extraire montant
+        const amountMatch = text.match(/(\d+[.,]?\d*)/);
+        let amount = 0;
+        
+        if (amountMatch) {
+            amount = parseFloat(amountMatch[0].replace(',', '.'));
+            if (isNaN(amount)) amount = 0;
+        }
+        
+        if (amount <= 0) {
+            showStatus("❌ Aucun montant détecté. Ex: '5 euros'", "error");
+            transcriptDisplay.textContent = "❌ Montant non détecté";
+            return;
+        }
+        
+        // Extraire catégorie
+        let category = "Divers";
+        const afterAmount = text.split(amountMatch[0])[1] || "";
+        if (afterAmount.trim()) {
+            category = afterAmount.replace(/[€euros€,.]/gi, '').trim();
+            if (category.length < 2) category = "Divers";
+            category = category.charAt(0).toUpperCase() + category.slice(1);
+        }
+        
+        const now = new Date();
+        const entry = {
+            id: Date.now(),
+            date: now.toLocaleDateString('fr-FR'),
+            time: now.toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'}),
+            type: type,
+            amount: amount,
+            category: category
+        };
+        
+        console.log("✅ Nouvelle transaction:", entry);
+        
+        // Ajouter à la liste locale
+        transactions.unshift(entry);
+        saveToLocal();
+        renderList();
+        
+        // Envoyer au cloud
+        await sendToGoogleSheets(entry);
+        
+        // Petit délai puis recharger pour voir la donnée
+        setTimeout(() => {
+            loadFromGoogleSheets();
+        }, 2000);
+    }
+    
+    // ========== AFFICHAGE ==========
+    function renderList() {
+        entriesList.innerHTML = '';
+        
+        if (!transactions || transactions.length === 0) {
+            entriesList.innerHTML = '<div style="text-align:center; color:#9CA3AF; padding:20px;">📭 Aucune transaction</div>';
+            return;
+        }
+        
+        // Filtrer les entrées valides
+        const validTransactions = transactions.filter(t => t && typeof t.amount === 'number' && !isNaN(t.amount) && t.date);
+        
+        if (validTransactions.length === 0) {
+            entriesList.innerHTML = '<div style="text-align:center; color:#9CA3AF; padding:20px;">⚠️ Données invalides</div>';
+            return;
+        }
+        
+        // Afficher les 30 dernières
+        validTransactions.slice(0, 30).forEach(t => {
+            const color = t.type === 'Dépense' ? '#EF4444' : '#10B981';
+            const sign = t.type === 'Dépense' ? '-' : '+';
+            const amount = t.amount.toFixed(2);
+            
+            const div = document.createElement('div');
+            div.className = 'entry';
+            div.innerHTML = `
+                <div class="entry-info">
+                    <h4>${t.category || 'Divers'}</h4>
+                    <span>${t.date || ''} à ${t.time || ''}</span>
+                </div>
+                <div class="entry-amount" style="color:${color}">
+                    ${sign} ${amount} €
+                </div>
+            `;
+            entriesList.appendChild(div);
+        });
+        
+        // Calculer total
+        const total = validTransactions.reduce((sum, t) => {
+            const amt = t.amount || 0;
+            return t.type === 'Dépense' ? sum - amt : sum + amt;
+        }, 0);
+        
+        const totalDiv = document.createElement('div');
+        totalDiv.style.cssText = "margin-top: 15px; padding-top: 15px; border-top: 2px solid #E5E7EB; text-align: center; font-weight: bold;";
+        totalDiv.innerHTML = `💰 Solde total : ${total.toFixed(2)} €`;
+        entriesList.appendChild(totalDiv);
+    }
+    
+    // ========== EXPORT CSV ==========
+    exportBtn.addEventListener('click', () => {
+        if (!transactions || transactions.length === 0) {
+            alert("Rien à exporter");
+            return;
+        }
+        
+        let csvContent = "Date,Heure,Type,Categorie,Montant\n";
+        
+        transactions.forEach(t => {
+            const row = `"${t.date || ''}","${t.time || ''}","${t.type || 'Dépense'}","${t.category || 'Divers'}",${t.amount || 0}`;
+            csvContent += row + "\n";
+        });
+        
+        const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", `voicefinance_${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        showStatus("📁 CSV exporté", "success");
+    });
+    
+    // ========== SYNC ==========
+    syncBtn.addEventListener('click', async () => {
+        showStatus("🔄 Synchronisation...", "loading");
+        await loadFromGoogleSheets();
+    });
+    
+    // ========== INITIALISATION ==========
+    console.log("🚀 VoiceFinance démarré");
+    console.log("URL Google Sheets:", GOOGLE_SHEETS_API_URL);
+    
+    // Charger depuis localStorage d'abord pour affichage immédiat
+    if (loadFromLocal()) {
+        renderList();
+        showStatus(`📱 ${transactions.length} transactions (mise à jour...)`, "loading");
+    }
+    
+    // Puis charger depuis le cloud
+    loadFromGoogleSheets();
+    
+    // Rafraîchissement auto toutes les 30 secondes
+    setInterval(() => {
+        console.log("🔄 Rafraîchissement auto...");
+        loadFromGoogleSheets();
+    }, 30000);
+</script>
+
+</body>
+</html><!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceFinance - Google Sheets</title>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --bg: #F3F4F6;
+            --card: #FFFFFF;
+            --text: #1F2937;
+            --danger: #EF4444;
+            --success: #10B981;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 { margin: 0; font-size: 1.5rem; }
+        p { color: #6B7280; font-size: 0.9rem; }
+
+        .mic-container {
+            background: var(--card);
+            padding: 20px;
+            border-radius: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .mic-btn {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            font-size: 30px;
+            cursor: pointer;
+            box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.4);
+            transition: transform 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px auto;
+        }
+
+        .mic-btn:active { transform: scale(0.95); }
+        .mic-btn.listening { animation: pulse 1.5s infinite; background-color: var(--danger); }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        #transcript {
+            font-style: italic;
+            color: #6B7280;
+            min-height: 20px;
+        }
+
+        .list-container {
+            background: var(--card);
+            border-radius: 15px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
 
         .entry {

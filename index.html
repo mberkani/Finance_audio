@@ -129,6 +129,16 @@
         .status.success { background: #D1FAE5; color: #065F46; }
         .status.error { background: #FEE2E2; color: #991B1B; }
         .status.loading { background: #DBEAFE; color: #1E40AF; }
+        
+        .refresh-btn {
+            background: #4F46E5;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
     </style>
 </head>
 <body>
@@ -160,8 +170,8 @@
 
 <script>
     // ========== CONFIGURATION ==========
-    // 🔴 REMPLACEZ CETTE URL PAR LA VÔTRE !!!
-    const GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwLQ2VF9qW38dZ_N5kABlJNtR_sqMrMxscdi3bAFiIvHJY7MfVx54aI5bgijfUjbKfKLQ/exec';
+    // 🔴 REMPLACEZ PAR VOTRE URL GOOGLE APPS SCRIPT
+    const GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwAsOp6gJGDNfo-KYnR1mu-3I9PLiCwgE4n2hBs9a5T-3dEJjV1jz5n_QInmgtZIwULgQ/exec';
     
     const micBtn = document.getElementById('micBtn');
     const transcriptDisplay = document.getElementById('transcript');
@@ -172,27 +182,56 @@
     
     let transactions = [];
     
+    // ========== FONCTION POUR FAIRE DES REQUÊTES ==========
+    async function fetchWithCors(url, options = {}) {
+        const defaultOptions = {
+            method: 'GET',
+            mode: 'cors',  // Important pour CORS
+            cache: 'no-cache',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        };
+        
+        const finalOptions = { ...defaultOptions, ...options };
+        
+        try {
+            const response = await fetch(url, finalOptions);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Fetch error:', error);
+            throw error;
+        }
+    }
+    
     // ========== CHARGEMENT DEPUIS GOOGLE SHEETS ==========
     async function loadFromGoogleSheets() {
         try {
             showStatus("Chargement des données...", "loading");
+            console.log("Chargement depuis:", GOOGLE_SHEETS_API_URL);
             
-            const response = await fetch(GOOGLE_SHEETS_API_URL);
+            const data = await fetchWithCors(GOOGLE_SHEETS_API_URL);
+            console.log("Données reçues:", data);
             
-            if (response.ok) {
-                transactions = await response.json();
+            if (data && !data.error) {
+                transactions = Array.isArray(data) ? data : [];
                 // Trier par date (plus récent d'abord)
                 transactions.reverse();
                 showStatus(`✅ ${transactions.length} transactions chargées`, "success");
             } else {
-                throw new Error("Erreur de chargement");
+                throw new Error(data?.error || "Données invalides");
             }
         } catch (error) {
-            console.error("Erreur:", error);
+            console.error("Erreur chargement:", error);
             // Fallback localStorage
             const localData = localStorage.getItem('financeData');
             transactions = localData ? JSON.parse(localData) : [];
-            showStatus("📱 Mode local - Vérifiez votre URL Google Sheets", "error");
+            showStatus("📱 Mode local - Erreur de connexion au cloud", "error");
         }
         
         renderList();
@@ -201,9 +240,12 @@
     // ========== ENVOI VERS GOOGLE SHEETS ==========
     async function sendToGoogleSheets(entry) {
         try {
+            showStatus("Envoi vers Google Sheets...", "loading");
+            
             const response = await fetch(GOOGLE_SHEETS_API_URL, {
                 method: 'POST',
-                mode: 'no-cors', // Important pour éviter les erreurs CORS
+                mode: 'cors',
+                cache: 'no-cache',
                 headers: {
                     'Content-Type': 'application/json',
                 },
@@ -216,12 +258,20 @@
                 })
             });
             
-            // Avec 'no-cors', on ne peut pas lire la réponse
-            // On considère que c'est réussi
-            return true;
-            
+            if (response.ok) {
+                const result = await response.json();
+                if (result.success) {
+                    showStatus("✅ Sauvegardé dans Google Sheets !", "success");
+                    return true;
+                } else {
+                    throw new Error(result.error || "Erreur inconnue");
+                }
+            } else {
+                throw new Error(`HTTP ${response.status}`);
+            }
         } catch (error) {
             console.error("Erreur d'envoi:", error);
+            showStatus(`⚠️ Sauvegardé localement uniquement: ${error.message}`, "error");
             return false;
         }
     }
@@ -302,15 +352,11 @@
         renderList();
         
         // Puis envoi vers Google Sheets
-        showStatus("Envoi vers Google Sheets...", "loading");
         const success = await sendToGoogleSheets(entry);
         
         if (success) {
-            showStatus("✅ Sauvegardé dans Google Sheets !", "success");
             // Recharger pour être à jour
             setTimeout(() => loadFromGoogleSheets(), 1000);
-        } else {
-            showStatus("⚠️ Sauvegardé localement uniquement", "error");
         }
     }
 
@@ -384,7 +430,7 @@
             if (statusMsg.textContent === message) {
                 statusMsg.className = 'status';
             }
-        }, 3000);
+        }, 4000);
     }
 
     // Initialisation
